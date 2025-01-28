@@ -9,40 +9,70 @@ on:
       versionType:
         description: 'Version Type'
         type: choice
-        required: true
+        required: false
         default: 'minor'
         options:
           - major
           - minor
           - patch
+      customVersion:
+        description: 'Custom Version'
+        required: false
       commitMessage:
         description: 'Commit Message'
         required: false
         default: 'Release version %s'
+      commitBy:
+        description: 'Commit By'
+        type: choice
+        required: true
+        default: me
+        options:
+          - me
+          - github-actions[bot]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: ./.github/workflows/node.js.yml
-  
-  bump-version:
+    uses: ./.github/workflows/node.js.yml
+
+  bump:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: 'dev'
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - name: Preparing
-        run: npm ci
+          node-version: 22
+      - name: Preparing git repositry
+        run: |
+          git config --global user.name "$USER_NAME"
+          git config --global user.email "$USER_EMAIL"
+        env:
+          USER_NAME: ${{ inputs.commitBy == 'me' && github.actor_id || inputs.commitBy }}
+          USER_EMAIL: ${{ inputs.commitBy == 'github-actions[bot]' && 'github-actions[bot]@users.noreply.github.com' || format('{0}+{1}@users.noreply.github.com', github.actor_id, github.actor) }}
+      - name: Preparing package
+        run: |
+          npm ci
+          npm audit
       - name: Bumping npm version
         run: npm version $VERSION_TYPE -m "$COMMIT_MSG"
         env:
-          VERSION_TYPE: ${{ inputs.versionType }}
+          VERSION_TYPE: ${{ inputs.customVersion || inputs.versionType }}
           COMMIT_MSG: ${{ inputs.commitMessage }}
       - name: Push to GitHub
-        run: git push
+        run: |
+          git push
+          git push --tags
+
+  pr:
+    if: ${{ github.event.repository.default_branch != github.ref_name  }}
+    needs: bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git pull
+      - run: gh pr create --fill-verbose
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
